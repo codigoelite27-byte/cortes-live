@@ -1,1 +1,1 @@
-streamlit
+streamlitopenai-whisper
