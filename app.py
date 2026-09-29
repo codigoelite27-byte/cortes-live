@@ -3,7 +3,7 @@ import tempfile
 import os
 import subprocess
 import whisper
-import html
+import gc
 
 st.set_page_config(
     page_title="Cortes de Lives",
@@ -21,15 +21,27 @@ video = st.file_uploader(
 duracao = st.number_input(
     "Duração de cada corte (segundos)",
     min_value=15,
-    max_value=300,
+    max_value=120,
     value=60,
     step=15
 )
 
+# Tiny como padrão para economizar memória
 modelo = st.selectbox(
     "Qualidade da legenda",
-    ["tiny", "base"]
+    ["tiny", "base"],
+    index=0
 )
+
+# Limita quantos cortes serão processados por execução
+quantidade = st.number_input(
+    "Quantidade de cortes para gerar",
+    min_value=1,
+    max_value=10,
+    value=3,
+    step=1
+)
+
 
 if video:
 
@@ -37,12 +49,26 @@ if video:
 
         with tempfile.TemporaryDirectory() as pasta:
 
+            # =====================================================
+            # 1. SALVA O VÍDEO
+            # =====================================================
+
+            st.info("1/4 — Preparando o vídeo...")
+
             entrada = os.path.join(pasta, "video.mp4")
 
             with open(entrada, "wb") as f:
-                f.write(video.read())
+                f.write(video.getbuffer())
 
-            st.info("1/4 — Gerando os cortes...")
+            # Libera o objeto enviado pelo Streamlit
+            del video
+            gc.collect()
+
+            # =====================================================
+            # 2. GERA OS CORTES
+            # =====================================================
+
+            st.info("2/4 — Gerando os cortes...")
 
             subprocess.run(
                 [
@@ -50,7 +76,8 @@ if video:
                     "-y",
                     "-i", entrada,
                     "-c", "copy",
-                    "-map", "0",
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
                     "-f", "segment",
                     "-segment_time", str(duracao),
                     "-reset_timestamps", "1",
@@ -62,40 +89,65 @@ if video:
             arquivos = sorted(
                 os.path.join(pasta, x)
                 for x in os.listdir(pasta)
-                if x.startswith("corte_") and x.endswith(".mp4")
+                if x.startswith("corte_")
+                and x.endswith(".mp4")
             )
 
             if not arquivos:
                 st.error("Não foi possível gerar os cortes.")
                 st.stop()
 
-            st.info("2/4 — Carregando modelo de legenda...")
+            # Limita a quantidade processada
+            arquivos = arquivos[:quantidade]
+
+            st.write(
+                f"Serão processados {len(arquivos)} cortes."
+            )
+
+            # =====================================================
+            # 3. CARREGA WHISPER
+            # =====================================================
+
+            st.info("3/4 — Carregando o modelo de legenda...")
 
             model = whisper.load_model(modelo)
 
             videos_finais = []
             legendas = []
 
-            st.info("3/4 — Transcrevendo os cortes...")
+            # =====================================================
+            # PROCESSA UM CORTE POR VEZ
+            # =====================================================
 
             for i, arquivo in enumerate(arquivos):
+
+                st.write(
+                    f"🎙️ Processando corte {i + 1}/{len(arquivos)}..."
+                )
+
+                # -------------------------------------------------
+                # TRANSCRIÇÃO
+                # -------------------------------------------------
 
                 resultado = model.transcribe(
                     arquivo,
                     language="pt",
-                    fp16=False
+                    fp16=False,
+                    temperature=0
                 )
 
-                # -----------------------------
-                # CRIA O SRT
-                # -----------------------------
+                # -------------------------------------------------
+                # SRT
+                # -------------------------------------------------
 
                 srt = os.path.splitext(arquivo)[0] + ".srt"
 
                 def tempo(segundos):
+
                     horas = int(segundos // 3600)
                     minutos = int((segundos % 3600) // 60)
                     segundos_int = int(segundos % 60)
+
                     milissegundos = int(
                         (segundos - int(segundos)) * 1000
                     )
@@ -107,36 +159,65 @@ if video:
                         f"{milissegundos:03d}"
                     )
 
-                with open(srt, "w", encoding="utf-8") as f:
+                with open(
+                    srt,
+                    "w",
+                    encoding="utf-8"
+                ) as f:
 
                     for n, segmento in enumerate(
-                        resultado["segments"], 1
+                        resultado["segments"],
+                        1
                     ):
 
                         inicio = segmento["start"]
                         fim = segmento["end"]
                         texto = segmento["text"].strip()
 
+                        if not texto:
+                            continue
+
                         f.write(f"{n}\n")
+
                         f.write(
                             f"{tempo(inicio)} --> "
                             f"{tempo(fim)}\n"
                         )
-                        f.write(f"{texto}\n\n")
+
+                        f.write(
+                            f"{texto}\n\n"
+                        )
 
                 legendas.append(srt)
 
-                st.write(
-                    f"Transcrição: {i + 1}/{len(arquivos)}"
-                )
-
-                # -----------------------------
-                # CRIA ASS PARA LEGENDA ESTILIZADA
-                # -----------------------------
+                # -------------------------------------------------
+                # ASS
+                # -------------------------------------------------
 
                 ass = os.path.splitext(arquivo)[0] + ".ass"
 
-                with open(ass, "w", encoding="utf-8") as f:
+                def ass_tempo(segundos):
+
+                    horas = int(segundos // 3600)
+                    minutos = int((segundos % 3600) // 60)
+                    segundos_int = int(segundos % 60)
+
+                    centesimos = int(
+                        (segundos - int(segundos)) * 100
+                    )
+
+                    return (
+                        f"{horas}:"
+                        f"{minutos:02d}:"
+                        f"{segundos_int:02d}."
+                        f"{centesimos:02d}"
+                    )
+
+                with open(
+                    ass,
+                    "w",
+                    encoding="utf-8"
+                ) as f:
 
                     f.write(
                         "[Script Info]\n"
@@ -156,9 +237,8 @@ if video:
                         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
                     )
 
-                    # Legenda grande, branca, com contorno preto
                     f.write(
-                      "Style: Default,DejaVu Sans,64,"
+                        "Style: Default,DejaVu Sans,64,"
                         "&H00FFFFFF,"
                         "&H0000FFFF,"
                         "&H00000000,"
@@ -170,6 +250,7 @@ if video:
                     )
 
                     f.write("[Events]\n")
+
                     f.write(
                         "Format: Layer, Start, End, Style, "
                         "Name, MarginL, MarginR, MarginV, "
@@ -185,22 +266,6 @@ if video:
                         if not texto:
                             continue
 
-                        def ass_tempo(segundos):
-                            horas = int(segundos // 3600)
-                            minutos = int((segundos % 3600) // 60)
-                            segundos_int = int(segundos % 60)
-                            centesimos = int(
-                                (segundos - int(segundos)) * 100
-                            )
-
-                            return (
-                                f"{horas}:"
-                                f"{minutos:02d}:"
-                                f"{segundos_int:02d}."
-                                f"{centesimos:02d}"
-                            )
-
-                        # Quebra textos muito longos em duas linhas
                         palavras = texto.split()
 
                         linhas = []
@@ -213,9 +278,12 @@ if video:
                             ).strip()
 
                             if len(teste) > 28:
+
                                 if linha:
                                     linhas.append(linha)
+
                                 linha = palavra
+
                             else:
                                 linha = teste
 
@@ -238,10 +306,13 @@ if video:
                             f"{texto_final}\n"
                         )
 
-                # -----------------------------
-                # GERA VÍDEO VERTICAL 9:16
-                # COM FUNDO DESFOCADO
-                # -----------------------------
+                # -------------------------------------------------
+                # VÍDEO VERTICAL
+                # -------------------------------------------------
+
+                st.write(
+                    f"🎬 Renderizando corte {i + 1}/{len(arquivos)}..."
+                )
 
                 saida = os.path.join(
                     pasta,
@@ -249,16 +320,23 @@ if video:
                 )
 
                 filtro = (
-                    "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "[0:v]"
+                    "scale=1080:1920:"
+                    "force_original_aspect_ratio=increase,"
                     "crop=1080:1920,"
                     "boxblur=30:10,"
                     "setsar=1,"
-                    "eq=brightness=-0.10[bg];"
+                    "eq=brightness=-0.10"
+                    "[bg];"
 
-                    "[0:v]scale=1080:608:force_original_aspect_ratio=decrease,"
-                    "setsar=1[fg];"
+                    "[0:v]"
+                    "scale=1080:608:"
+                    "force_original_aspect_ratio=decrease,"
+                    "setsar=1"
+                    "[fg];"
 
-                    "[bg][fg]overlay=(W-w)/2:(H-h)/2,"
+                    "[bg][fg]"
+                    "overlay=(W-w)/2:(H-h)/2,"
                     f"subtitles='{ass}'"
                 )
 
@@ -268,15 +346,21 @@ if video:
                         "-y",
                         "-i", arquivo,
                         "-filter_complex", filtro,
+
                         "-map", "0:v:0",
                         "-map", "0:a?",
+
                         "-c:v", "libx264",
-                        "-preset", "veryfast",
-                        "-crf", "23",
+                        "-preset", "ultrafast",
+                        "-crf", "27",
+
                         "-c:a", "aac",
-                        "-b:a", "128k",
+                        "-b:a", "96k",
+
                         "-pix_fmt", "yuv420p",
+
                         "-movflags", "+faststart",
+
                         saida
                     ],
                     check=True
@@ -284,21 +368,47 @@ if video:
 
                 videos_finais.append(saida)
 
-            st.info("4/4 — Finalizando os vídeos...")
+                # =================================================
+                # LIBERA MEMÓRIA DO CORTE
+                # =================================================
+
+                del resultado
+
+                gc.collect()
+
+                st.success(
+                    f"✅ Corte {i + 1} pronto!"
+                )
+
+            # =====================================================
+            # FINAL
+            # =====================================================
+
+            st.info("4/4 — Finalizando...")
 
             st.success(
-                f"✅ {len(videos_finais)} cortes prontos para Reels/TikTok!"
+                f"🎉 {len(videos_finais)} cortes prontos!"
             )
 
-            # -----------------------------
-            # MOSTRA O PRIMEIRO CORTE
-            # -----------------------------
+            # =====================================================
+            # MOSTRA PRIMEIRO CORTE
+            # =====================================================
 
-            st.subheader("🎬 Primeiro corte pronto")
+            st.subheader("🎬 Primeiro corte")
 
-            st.video(videos_finais[0])
+            st.video(
+                videos_finais[0]
+            )
 
-            with open(videos_finais[0], "rb") as f:
+            # =====================================================
+            # DOWNLOAD
+            # =====================================================
+
+            with open(
+                videos_finais[0],
+                "rb"
+            ) as f:
+
                 video_bytes = f.read()
 
             st.download_button(
@@ -308,11 +418,11 @@ if video:
                 mime="video/mp4"
             )
 
-            # -----------------------------
-            # LEGENDA SRT
-            # -----------------------------
+            with open(
+                legendas[0],
+                "rb"
+            ) as f:
 
-            with open(legendas[0], "rb") as f:
                 srt_bytes = f.read()
 
             st.download_button(
@@ -321,3 +431,7 @@ if video:
                 file_name="corte_001.srt",
                 mime="text/plain"
             )
+
+            # Libera memória final
+            del model
+            gc.collect()
