@@ -26,19 +26,17 @@ duracao = st.number_input(
     step=15
 )
 
-# Tiny como padrão para economizar memória
 modelo = st.selectbox(
     "Qualidade da legenda",
     ["tiny", "base"],
     index=0
 )
 
-# Limita quantos cortes serão processados por execução
 quantidade = st.number_input(
     "Quantidade de cortes para gerar",
     min_value=1,
     max_value=10,
-    value=3,
+    value=1,
     step=1
 )
 
@@ -50,7 +48,7 @@ if video:
         with tempfile.TemporaryDirectory() as pasta:
 
             # =====================================================
-            # 1. SALVA O VÍDEO
+            # 1 — SALVA O VÍDEO
             # =====================================================
 
             st.info("1/4 — Preparando o vídeo...")
@@ -60,12 +58,11 @@ if video:
             with open(entrada, "wb") as f:
                 f.write(video.getbuffer())
 
-            # Libera o objeto enviado pelo Streamlit
             del video
             gc.collect()
 
             # =====================================================
-            # 2. GERA OS CORTES
+            # 2 — GERA OS CORTES
             # =====================================================
 
             st.info("2/4 — Gerando os cortes...")
@@ -81,7 +78,10 @@ if video:
                     "-f", "segment",
                     "-segment_time", str(duracao),
                     "-reset_timestamps", "1",
-                    os.path.join(pasta, "corte_%03d.mp4")
+                    os.path.join(
+                        pasta,
+                        "corte_%03d.mp4"
+                    )
                 ],
                 check=True
             )
@@ -94,10 +94,11 @@ if video:
             )
 
             if not arquivos:
-                st.error("Não foi possível gerar os cortes.")
+                st.error(
+                    "Não foi possível gerar os cortes."
+                )
                 st.stop()
 
-            # Limita a quantidade processada
             arquivos = arquivos[:quantidade]
 
             st.write(
@@ -105,24 +106,23 @@ if video:
             )
 
             # =====================================================
-            # 3. CARREGA WHISPER
+            # 3 — WHISPER
             # =====================================================
 
-            st.info("3/4 — Carregando o modelo de legenda...")
+            st.info(
+                "3/4 — Carregando modelo de legenda..."
+            )
 
             model = whisper.load_model(modelo)
 
             videos_finais = []
             legendas = []
 
-            # =====================================================
-            # PROCESSA UM CORTE POR VEZ
-            # =====================================================
-
             for i, arquivo in enumerate(arquivos):
 
                 st.write(
-                    f"🎙️ Processando corte {i + 1}/{len(arquivos)}..."
+                    f"🎙️ Transcrevendo corte "
+                    f"{i + 1}/{len(arquivos)}..."
                 )
 
                 # -------------------------------------------------
@@ -136,17 +136,27 @@ if video:
                     temperature=0
                 )
 
-                # -------------------------------------------------
+                # =================================================
                 # SRT
-                # -------------------------------------------------
+                # =================================================
 
-                srt = os.path.splitext(arquivo)[0] + ".srt"
+                srt = os.path.splitext(
+                    arquivo
+                )[0] + ".srt"
 
                 def tempo(segundos):
 
-                    horas = int(segundos // 3600)
-                    minutos = int((segundos % 3600) // 60)
-                    segundos_int = int(segundos % 60)
+                    horas = int(
+                        segundos // 3600
+                    )
+
+                    minutos = int(
+                        (segundos % 3600) // 60
+                    )
+
+                    segundos_int = int(
+                        segundos % 60
+                    )
 
                     milissegundos = int(
                         (segundos - int(segundos)) * 1000
@@ -165,19 +175,24 @@ if video:
                     encoding="utf-8"
                 ) as f:
 
-                    for n, segmento in enumerate(
-                        resultado["segments"],
-                        1
-                    ):
+                    numero = 1
+
+                    for segmento in resultado["segments"]:
 
                         inicio = segmento["start"]
                         fim = segmento["end"]
-                        texto = segmento["text"].strip()
+
+                        texto = (
+                            segmento["text"]
+                            .strip()
+                        )
 
                         if not texto:
                             continue
 
-                        f.write(f"{n}\n")
+                        f.write(
+                            f"{numero}\n"
+                        )
 
                         f.write(
                             f"{tempo(inicio)} --> "
@@ -188,130 +203,17 @@ if video:
                             f"{texto}\n\n"
                         )
 
+                        numero += 1
+
                 legendas.append(srt)
 
-                # -------------------------------------------------
-                # ASS
-                # -------------------------------------------------
-
-                ass = os.path.splitext(arquivo)[0] + ".ass"
-
-                def ass_tempo(segundos):
-
-                    horas = int(segundos // 3600)
-                    minutos = int((segundos % 3600) // 60)
-                    segundos_int = int(segundos % 60)
-
-                    centesimos = int(
-                        (segundos - int(segundos)) * 100
-                    )
-
-                    return (
-                        f"{horas}:"
-                        f"{minutos:02d}:"
-                        f"{segundos_int:02d}."
-                        f"{centesimos:02d}"
-                    )
-
-                with open(
-                    ass,
-                    "w",
-                    encoding="utf-8"
-                ) as f:
-
-                    f.write(
-                        "[Script Info]\n"
-                        "ScriptType: v4.00+\n"
-                        "PlayResX: 1080\n"
-                        "PlayResY: 1920\n\n"
-                    )
-
-                    f.write(
-                        "[V4+ Styles]\n"
-                        "Format: Name, Fontname, Fontsize, "
-                        "PrimaryColour, SecondaryColour, "
-                        "OutlineColour, BackColour, Bold, "
-                        "Italic, Underline, StrikeOut, "
-                        "ScaleX, ScaleY, Spacing, Angle, "
-                        "BorderStyle, Outline, Shadow, "
-                        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-                    )
-
-                    f.write(
-                        "Style: Default,DejaVu Sans,64,"
-                        "&H00FFFFFF,"
-                        "&H0000FFFF,"
-                        "&H00000000,"
-                        "&H80000000,"
-                        "1,0,0,0,"
-                        "100,100,2,0,"
-                        "1,5,2,"
-                        "2,70,70,430,1\n\n"
-                    )
-
-                    f.write("[Events]\n")
-
-                    f.write(
-                        "Format: Layer, Start, End, Style, "
-                        "Name, MarginL, MarginR, MarginV, "
-                        "Effect, Text\n"
-                    )
-
-                    for segmento in resultado["segments"]:
-
-                        inicio = segmento["start"]
-                        fim = segmento["end"]
-                        texto = segmento["text"].strip()
-
-                        if not texto:
-                            continue
-
-                        palavras = texto.split()
-
-                        linhas = []
-                        linha = ""
-
-                        for palavra in palavras:
-
-                            teste = (
-                                linha + " " + palavra
-                            ).strip()
-
-                            if len(teste) > 28:
-
-                                if linha:
-                                    linhas.append(linha)
-
-                                linha = palavra
-
-                            else:
-                                linha = teste
-
-                        if linha:
-                            linhas.append(linha)
-
-                        texto_final = "\\N".join(linhas)
-
-                        texto_final = (
-                            texto_final
-                            .replace("{", "")
-                            .replace("}", "")
-                        )
-
-                        f.write(
-                            f"Dialogue: 0,"
-                            f"{ass_tempo(inicio)},"
-                            f"{ass_tempo(fim)},"
-                            f"Default,,0,0,0,,"
-                            f"{texto_final}\n"
-                        )
-
-                # -------------------------------------------------
+                # =================================================
                 # VÍDEO VERTICAL
-                # -------------------------------------------------
+                # =================================================
 
                 st.write(
-                    f"🎬 Renderizando corte {i + 1}/{len(arquivos)}..."
+                    f"🎬 Renderizando corte "
+                    f"{i + 1}/{len(arquivos)}..."
                 )
 
                 saida = os.path.join(
@@ -319,7 +221,11 @@ if video:
                     f"reels_{i + 1:03d}.mp4"
                 )
 
-                filtro = (
+                # -------------------------------------------------
+                # FUNDO + VÍDEO
+                # -------------------------------------------------
+
+                filtro_video = (
                     "[0:v]"
                     "scale=1080:1920:"
                     "force_original_aspect_ratio=increase,"
@@ -336,102 +242,90 @@ if video:
                     "[fg];"
 
                     "[bg][fg]"
-                    "overlay=(W-w)/2:(H-h)/2,"
-                    f"subtitles='{ass}'"
+                    "overlay=(W-w)/2:(H-h)/2"
+                    "[v]"
                 )
+
+                # -------------------------------------------------
+                # LEGENDA DIRETO DO SRT
+                # -------------------------------------------------
+
+                # Caminho absoluto escapado para FFmpeg
+                srt_ffmpeg = srt.replace(
+                    "\\",
+                    "/"
+                ).replace(
+                    ":",
+                    "\\:"
+                )
+
+                filtro = (
+                    filtro_video
+                    + ";[v]"
+                    + f"subtitles='{srt_ffmpeg}'"
+                    + ":force_style='"
+                    "FontName=DejaVu Sans,"
+                    "FontSize=64,"
+                    "PrimaryColour=&H00FFFFFF,"
+                    "OutlineColour=&H00000000,"
+                    "BorderStyle=1,"
+                    "Outline=5,"
+                    "Shadow=2,"
+                    "Bold=1,"
+                    "Alignment=2,"
+                    "MarginV=430"
+                    "'"
+                )
+
+                # -------------------------------------------------
+                # FFMPEG
+                # -------------------------------------------------
 
                 subprocess.run(
                     [
                         "ffmpeg",
                         "-y",
-                        "-i", arquivo,
-                        "-filter_complex", filtro,
 
-                        "-map", "0:v:0",
-                        "-map", "0:a?",
+                        "-i",
+                        arquivo,
 
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-crf", "27",
+                        "-filter_complex",
+                        filtro,
 
-                        "-c:a", "aac",
-                        "-b:a", "96k",
+                        "-map",
+                        "0:v:0",
 
-                        "-pix_fmt", "yuv420p",
+                        "-map",
+                        "0:a?",
 
-                        "-movflags", "+faststart",
+                        "-c:v",
+                        "libx264",
+
+                        "-preset",
+                        "ultrafast",
+
+                        "-crf",
+                        "27",
+
+                        "-c:a",
+                        "aac",
+
+                        "-b:a",
+                        "96k",
+
+                        "-pix_fmt",
+                        "yuv420p",
+
+                        "-movflags",
+                        "+faststart",
 
                         saida
                     ],
                     check=True
                 )
 
-                videos_finais.append(saida)
-
-                # =================================================
-                # LIBERA MEMÓRIA DO CORTE
-                # =================================================
-
-                del resultado
-
-                gc.collect()
-
-                st.success(
-                    f"✅ Corte {i + 1} pronto!"
+                videos_finais.append(
+                    saida
                 )
 
-            # =====================================================
-            # FINAL
-            # =====================================================
-
-            st.info("4/4 — Finalizando...")
-
-            st.success(
-                f"🎉 {len(videos_finais)} cortes prontos!"
-            )
-
-            # =====================================================
-            # MOSTRA PRIMEIRO CORTE
-            # =====================================================
-
-            st.subheader("🎬 Primeiro corte")
-
-            st.video(
-                videos_finais[0]
-            )
-
-            # =====================================================
-            # DOWNLOAD
-            # =====================================================
-
-            with open(
-                videos_finais[0],
-                "rb"
-            ) as f:
-
-                video_bytes = f.read()
-
-            st.download_button(
-                "⬇️ Baixar primeiro corte — 9:16 + legenda",
-                data=video_bytes,
-                file_name="corte_reels_001.mp4",
-                mime="video/mp4"
-            )
-
-            with open(
-                legendas[0],
-                "rb"
-            ) as f:
-
-                srt_bytes = f.read()
-
-            st.download_button(
-                "📝 Baixar legenda (.srt)",
-                data=srt_bytes,
-                file_name="corte_001.srt",
-                mime="text/plain"
-            )
-
-            # Libera memória final
-            del model
-            gc.collect()
+                # Lib
