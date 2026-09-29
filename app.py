@@ -158,7 +158,7 @@ if video:
 
                     # Legenda grande, branca, com contorno preto
                     f.write(
-                        "Style: Default,Arial,64,"
+                      "Style: Default,DejaVu Sans,64,"
                         "&H00FFFFFF,"
                         "&H0000FFFF,"
                         "&H00000000,"
