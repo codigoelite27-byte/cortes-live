@@ -2,11 +2,15 @@ import streamlit as st
 import tempfile
 import os
 import subprocess
+import whisper
 
-st.set_page_config(page_title="Cortes de Lives", page_icon="✂️")
+st.set_page_config(
+    page_title="Cortes de Lives",
+    page_icon="✂️"
+)
 
 st.title("✂️ Cortes de Lives")
-st.write("Gere vários trechos de um vídeo automaticamente.")
+st.write("Gere cortes com legenda automática.")
 
 video = st.file_uploader(
     "Envie sua live ou vídeo",
@@ -21,8 +25,15 @@ duracao = st.number_input(
     step=15
 )
 
+modelo = st.selectbox(
+    "Qualidade da legenda",
+    ["tiny", "base"]
+)
+
 if video:
-    if st.button("✂️ Gerar cortes"):
+
+    if st.button("✂️ Gerar cortes com legenda"):
+
         with tempfile.TemporaryDirectory() as pasta:
 
             entrada = os.path.join(pasta, "video.mp4")
@@ -30,9 +41,9 @@ if video:
             with open(entrada, "wb") as f:
                 f.write(video.read())
 
-            st.info("Gerando os cortes...")
+            st.info("1/3 — Gerando os cortes...")
 
-            resultado = subprocess.run(
+            subprocess.run(
                 [
                     "ffmpeg",
                     "-i", entrada,
@@ -43,8 +54,7 @@ if video:
                     "-reset_timestamps", "1",
                     os.path.join(pasta, "corte_%03d.mp4")
                 ],
-                capture_output=True,
-                text=True
+                check=True
             )
 
             arquivos = sorted(
@@ -55,14 +65,82 @@ if video:
 
             if not arquivos:
                 st.error("Não foi possível gerar os cortes.")
-            else:
-                st.success(f"{len(arquivos)} cortes gerados!")
+                st.stop()
 
-                for arquivo in arquivos:
-                    with open(arquivo, "rb") as f:
-                        st.download_button(
-                            f"⬇️ Baixar {os.path.basename(arquivo)}",
-                            f,
-                            file_name=os.path.basename(arquivo),
-                            mime="video/mp4"
+            st.info("2/3 — Carregando modelo de legenda...")
+
+            model = whisper.load_model(modelo)
+
+            st.info("3/3 — Gerando legendas...")
+
+            for i, arquivo in enumerate(arquivos):
+
+                resultado = model.transcribe(
+                    arquivo,
+                    language="pt",
+                    fp16=False
+                )
+
+                srt = os.path.splitext(arquivo)[0] + ".srt"
+
+                with open(srt, "w", encoding="utf-8") as f:
+
+                    for n, segmento in enumerate(
+                        resultado["segments"], 1
+                    ):
+
+                        inicio = segmento["start"]
+                        fim = segmento["end"]
+                        texto = segmento["text"].strip()
+
+                        def tempo(segundos):
+                            horas = int(segundos // 3600)
+                            minutos = int((segundos % 3600) // 60)
+                            segundos_int = int(segundos % 60)
+                            milissegundos = int(
+                                (segundos - int(segundos)) * 1000
+                            )
+
+                            return (
+                                f"{horas:02d}:"
+                                f"{minutos:02d}:"
+                                f"{segundos_int:02d},"
+                                f"{milissegundos:03d}"
+                            )
+
+                        f.write(f"{n}\n")
+                        f.write(
+                            f"{tempo(inicio)} --> "
+                            f"{tempo(fim)}\n"
                         )
+                        f.write(f"{texto}\n\n")
+
+                st.write(
+                    f"Legenda gerada: "
+                    f"{i + 1}/{len(arquivos)}"
+                )
+
+            st.success(
+                f"✅ {len(arquivos)} cortes gerados!"
+            )
+
+            st.download_button(
+                "⬇️ Baixar primeiro corte",
+                data=open(arquivos[0], "rb").read(),
+                file_name=os.path.basename(arquivos[0]),
+                mime="video/mp4"
+            )
+
+            primeiro_srt = os.path.splitext(
+                arquivos[0]
+            )[0] + ".srt"
+
+            st.download_button(
+                "📝 Baixar legenda do primeiro corte",
+                data=open(
+                    primeiro_srt,
+                    "rb"
+                ).read(),
+                file_name=os.path.basename(primeiro_srt),
+                mime="text/plain"
+            )
